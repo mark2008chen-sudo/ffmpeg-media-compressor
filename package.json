@@ -1,0 +1,8 @@
+{
+  "name": "ffmpeg-media-compressor",
+  "description": "使用FFmpeg压缩视频/音频文件，保持画质不变，支持CPU/GPU编码。自动安装FFmpeg、批量处理、预测输出大小，适合小白用户。",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "python -m backend.main"
+  }
+}

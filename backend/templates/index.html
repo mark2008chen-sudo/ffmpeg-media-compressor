@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FFmpeg 媒体压缩工具</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="container">
+    <!-- 顶部 -->
+    <header class="header">
+        <div class="header-title">
+            <span class="logo">🎬</span>
+            <h1>FFmpeg 媒体压缩工具</h1>
+            <span class="badge">v1.0</span>
+        </div>
+        <div class="header-info">
+            <span id="ffmpegStatus" class="status-tag status-loading">检测中...</span>
+            <a href="https://github.com" target="_blank" class="github-link">GitHub</a>
+        </div>
+    </header>
+
+    <!-- 安装向导 -->
+    <div id="installWizard" class="card hidden">
+        <div class="card-header">📥 安装 FFmpeg</div>
+        <div class="card-body">
+            <p>未检测到 FFmpeg，需要自动下载安装（约 50-100MB）</p>
+            <button id="installBtn" class="btn btn-primary" onclick="startInstall()">一键安装 FFmpeg</button>
+            <div id="installProgress" class="hidden">
+                <div class="progress-bar"><div id="installBar" class="progress-fill"></div></div>
+                <p id="installMsg" class="install-msg"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主界面 -->
+    <div id="mainUI" class="hidden">
+        <!-- 上传区域 -->
+        <div class="card">
+            <div class="card-header">📤 选择文件</div>
+            <div class="card-body">
+                <div id="dropZone" class="drop-zone">
+                    <div class="drop-icon">📁</div>
+                    <p>拖拽文件到此处，或 <a href="#" onclick="document.getElementById('fileInput').click();return false">点击选择</a></p>
+                    <p class="drop-hint">支持 MP4, AVI, MKV, MOV, WebM, MP3, WAV, AAC, FLAC</p>
+                    <input type="file" id="fileInput" multiple accept="video/*,audio/*" class="hidden-input">
+                </div>
+                <div id="fileList" class="file-list"></div>
+            </div>
+        </div>
+
+        <!-- 设置区域 -->
+        <div class="settings-grid">
+            <div class="card">
+                <div class="card-header">⚙️ 压缩设置</div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label>压缩模式</label>
+                        <select id="compressionMode" onchange="onModeChange()" class="form-select">
+                            <option value="balanced">🟢 平衡模式（推荐）</option>
+                            <option value="quality">✨ 保持画质</option>
+                            <option value="small">📦 强力压缩</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>编码方式</label>
+                        <select id="encoderSelect" class="form-select"></select>
+                        <small class="form-hint">CPU 编码画质更好，GPU 编码速度更快</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>输出格式</label>
+                        <select id="outputFormat" class="form-select">
+                            <option value="mp4">MP4（推荐）</option>
+                            <option value="mkv">MKV</option>
+                            <option value="mov">MOV</option>
+                            <option value="webm">WebM</option>
+                            <option value="mp3">MP3（仅音频）</option>
+                            <option value="aac">AAC（仅音频）</option>
+                            <option value="flac">FLAC（仅音频，无损）</option>
+                            <option value="wav">WAV（仅音频，无损）</option>
+                        </select>
+                    </div>
+
+                    <details class="advanced-details">
+                        <summary>🔧 高级选项</summary>
+                        <div class="advanced-body">
+                            <div class="form-group">
+                                <label>CRF 值 <span id="crfValue">23</span>（越小质量越好）</label>
+                                <input type="range" id="crfSlider" min="18" max="30" value="23" class="form-range"
+                                       oninput="document.getElementById('crfValue').textContent=this.value">
+                            </div>
+                            <div class="form-group">
+                                <label>音频比特率</label>
+                                <select id="audioBitrate" class="form-select">
+                                    <option value="128k">128 kbps</option>
+                                    <option value="192k" selected>192 kbps（推荐）</option>
+                                    <option value="256k">256 kbps</option>
+                                    <option value="320k">320 kbps（高音质）</option>
+                                    <option value="copy">保持原始</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>分辨率</label>
+                                <select id="resolution" class="form-select">
+                                    <option value="original">保持原始</option>
+                                    <option value="3840x2160">4K (3840x2160)</option>
+                                    <option value="1920x1080">1080p (1920x1080)</option>
+                                    <option value="1280x720">720p (1280x720)</option>
+                                    <option value="854x480">480p (854x480)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>输出目录</label>
+                                <div class="input-row">
+                                    <input type="text" id="outputDir" value="D:\Software\ffmpeg-media-compressor\temp\outputs" class="form-input" readonly>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+            </div>
+
+            <!-- 预测区域 -->
+            <div class="card" id="predictCard">
+                <div class="card-header">📊 大小预测</div>
+                <div class="card-body">
+                    <p class="predict-hint">选择文件后可预测压缩后的文件大小</p>
+                    <button id="predictBtn" class="btn btn-secondary" onclick="predictSize()" disabled>📈 预测大小</button>
+                    <div id="predictResult" class="predict-result hidden">
+                        <div class="predict-compare">
+                            <div class="predict-original">
+                                <div class="predict-label">原始</div>
+                                <div class="predict-value" id="predOrigSize">0 MB</div>
+                            </div>
+                            <div class="predict-arrow">→</div>
+                            <div class="predict-compressed">
+                                <div class="predict-label">压缩后</div>
+                                <div class="predict-value predict-green" id="predCompSize">0 MB</div>
+                            </div>
+                        </div>
+                        <div class="predict-savings">
+                            <span>节省：</span>
+                            <span class="predict-savings-value" id="predSavings">0%</span>
+                        </div>
+                        <div class="predict-bar">
+                            <div class="predict-bar-fill" id="predBar" style="width:0%"></div>
+                        </div>
+                        <div class="predict-confidence" id="predConfidence">置信度：--</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="action-bar">
+            <button id="compressBtn" class="btn btn-primary btn-lg" onclick="startCompress()" disabled>🚀 开始压缩</button>
+            <button class="btn btn-secondary" onclick="clearAll()">🗑️ 全部清除</button>
+        </div>
+
+        <!-- 进度区域 -->
+        <div class="card" id="progressCard">
+            <div class="card-header">⏳ 压缩进度</div>
+            <div class="card-body" id="progressBody">
+                <p class="text-muted">暂无任务</p>
+            </div>
+        </div>
+
+        <!-- 结果区域 -->
+        <div class="card" id="resultCard">
+            <div class="card-header">✅ 完成文件</div>
+            <div class="card-body" id="resultBody">
+                <p class="text-muted">暂无完成文件</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>
