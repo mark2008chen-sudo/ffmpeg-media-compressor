@@ -27,6 +27,21 @@ def predict_size(ffmpeg_path, ffprobe_path, input_file, output_params):
     original_size_bytes = os.path.getsize(input_file)
     original_size_mb = round(original_size_bytes / 1048576, 1)
 
+    # 目标体积模式 → 直接计算（精确值）
+    if output_params.get('mode') == 'target_size':
+        target_pct = int(output_params.get('target_percent', 60))
+        predicted_mb = round(original_size_mb * target_pct / 100, 1)
+        compression_ratio = round(predicted_mb / original_size_mb, 3) if original_size_mb > 0 else 1.0
+        return {
+            "original_size_mb": original_size_mb,
+            "predicted_size_mb": predicted_mb,
+            "savings_mb": round(original_size_mb - predicted_mb, 1),
+            "savings_percent": round((1 - compression_ratio) * 100, 1),
+            "compression_ratio": compression_ratio,
+            "confidence": 1.0,
+            "method": "target_size_direct",
+        }
+
     # 获取视频时长
     duration = _get_duration(ffprobe_path, input_file)
 
@@ -190,7 +205,7 @@ def _build_ffmpeg_command(ffmpeg_path, input_file, output_file, params, show_pro
         crf = params.get("crf", 23)
 
         if "nvenc" in video_encoder:
-            cmd.extend(["-c:v", video_encoder, "-cq", str(crf)])
+            cmd.extend(["-c:v", video_encoder, "-cq", str(crf), "-preset", "p2"])
         elif "qsv" in video_encoder:
             cmd.extend(["-c:v", video_encoder, "-global_quality", str(crf)])
         elif "amf" in video_encoder:

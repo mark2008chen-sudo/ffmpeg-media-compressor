@@ -17,9 +17,35 @@
         </div>
         <div class="header-info">
             <span id="ffmpegStatus" class="status-tag status-loading">检测中...</span>
+            <button id="darkModeToggle" class="icon-btn" onclick="toggleDarkMode()" title="切换深色模式">🌙</button>
+            <span id="configBtn" class="config-btn" onclick="toggleConfig()" title="设置">⚙️</span>
             <a href="https://github.com" target="_blank" class="github-link">GitHub</a>
         </div>
     </header>
+
+    <!-- 配置面板 -->
+    <div id="configPanel" class="card hidden">
+        <div class="card-header">⚙️ 配置</div>
+        <div class="card-body">
+            <div class="form-group">
+                <label>最大并行任务数</label>
+                <select id="maxConcurrent" class="form-select" onchange="updateMaxConcurrent()">
+                    <option value="1">1 个（最稳定）</option>
+                    <option value="2" selected>2 个（推荐）</option>
+                    <option value="3">3 个</option>
+                    <option value="4">4 个</option>
+                </select>
+                <small class="form-hint">同时运行的任务数量，GPU 编码建议 ≤2</small>
+            </div>
+            <div class="form-group">
+                <label>压缩完成后</label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="autoNotifyCheck" checked>
+                    <span>🔔 桌面通知</span>
+                </label>
+            </div>
+        </div>
+    </div>
 
     <!-- 安装向导 -->
     <div id="installWizard" class="card hidden">
@@ -64,6 +90,54 @@
                         </select>
                     </div>
 
+                    <!-- 简易选项 -->
+                    <div class="simple-presets">
+                        <div class="preset-header-row">
+                            <label class="form-label">📋 简易选项</label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="targetSizeToggle" onchange="onTargetSizeToggle()">
+                                <span>🎯 指定压缩比例</span>
+                            </label>
+                        </div>
+                        <div class="preset-group" id="presetGroup">
+                            <button class="preset-btn" data-preset="quality" onclick="selectPreset('quality')">
+                                <span class="preset-icon">✨</span>
+                                <span class="preset-text">
+                                    <span class="preset-title">压缩体积，保存现画质</span>
+                                    <span class="preset-desc">轻微压缩，画质几乎无损</span>
+                                </span>
+                            </button>
+                            <button class="preset-btn preset-active" data-preset="balanced" onclick="selectPreset('balanced')">
+                                <span class="preset-icon">⚖️</span>
+                                <span class="preset-text">
+                                    <span class="preset-title">压缩体积，中等画质</span>
+                                    <span class="preset-desc">平衡体积与画质（推荐）</span>
+                                </span>
+                            </button>
+                            <button class="preset-btn" data-preset="small" onclick="selectPreset('small')">
+                                <span class="preset-icon">📦</span>
+                                <span class="preset-text">
+                                    <span class="preset-title">压缩体积，低画质</span>
+                                    <span class="preset-desc">最大压缩，体积最小</span>
+                                </span>
+                            </button>
+                        </div>
+                        <!-- 百分比滑块（默认隐藏，勾选复选框后显示） -->
+                        <div id="targetSizeOptions" class="target-size-inline hidden">
+                            <div class="target-slider-row">
+                                <label class="target-slider-label">压缩至原体积的</label>
+                                <span id="targetPctValue" class="target-pct-display">60%</span>
+                            </div>
+                            <input type="range" id="targetPctSlider" class="target-pct-slider"
+                                   min="10" max="80" value="60" step="5"
+                                   oninput="onTargetPctChange()">
+                            <div class="target-slider-hints">
+                                <span>10% 最小</span>
+                                <span>80% 轻微</span>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="form-group">
                         <label>编码方式</label>
                         <select id="encoderSelect" class="form-select"></select>
@@ -87,6 +161,12 @@
                     <details class="advanced-details">
                         <summary>🔧 高级选项</summary>
                         <div class="advanced-body">
+                            <div id="presetNote" class="preset-control-note hidden">
+                                <span>💡 以下参数由「简易选项」自动控制</span>
+                            </div>
+                            <div id="targetModeNote" class="target-mode-note hidden">
+                                <span>📏 当前为按目标体积压缩模式，CRF/音频/分辨率由系统自动计算</span>
+                            </div>
                             <div class="form-group">
                                 <label>CRF 值 <span id="crfValue">23</span>（越小质量越好）</label>
                                 <input type="range" id="crfSlider" min="18" max="30" value="23" class="form-range"
@@ -157,7 +237,9 @@
         <!-- 操作按钮 -->
         <div class="action-bar">
             <button id="compressBtn" class="btn btn-primary btn-lg" onclick="startCompress()" disabled>🚀 开始压缩</button>
+            <button id="stopAllBtn" class="btn btn-danger btn-lg hidden" onclick="stopAllTasks()">🛑 停止全部</button>
             <button class="btn btn-secondary" onclick="clearAll()">🗑️ 全部清除</button>
+            <button id="exportReportBtn" class="btn btn-secondary hidden" onclick="exportReport()">📊 导出报告</button>
         </div>
 
         <!-- 进度区域 -->

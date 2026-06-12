@@ -2,6 +2,7 @@
 FFmpeg Media Compressor - Flask 主服务器
 """
 import os
+import sys
 import json
 import uuid
 import shutil
@@ -11,7 +12,7 @@ from flask import Flask, request, jsonify, send_file, render_template, Response,
 
 from .ffmpeg_manager import (
     check_installed, get_available_encoders, get_media_info,
-    download_and_install_ffmpeg, BIN_DIR,
+    download_and_install_ffmpeg, BIN_DIR, detect_hardware,
 )
 from .size_predictor import predict_size
 from .compression_engine import CompressionEngine, CompressionTask
@@ -33,6 +34,7 @@ ffmpeg_info = {"path": None, "version": None, "installed": False}
 ffprobe_path = None
 engine = None
 _install_status = {"progress": "", "done": False, "success": False, "error": None}
+max_concurrent_tasks = 2  # 默认同时最多2个任务
 
 
 @app.route("/")
@@ -45,6 +47,8 @@ def api_status():
     """获取系统状态：FFmpeg安装状态、可用编码器"""
     global ffmpeg_info, ffprobe_path, engine
     installed, info = check_installed()
+    # Debug: 打印检测结果到日志
+    print(f"[DEBUG] check_installed result: installed={installed}, info={info}")
     if installed:
         ffmpeg_info["path"] = info[0]
         ffmpeg_info["version"] = info[1]
@@ -59,15 +63,20 @@ def api_status():
         if engine is None:
             engine = CompressionEngine(ffmpeg_info["path"], ffprobe_path)
 
-        encoders = get_available_encoders(ffmpeg_info["path"])
+        hw_info = detect_hardware()
+        print(f"[DEBUG] detect_hardware: {json.dumps(hw_info, ensure_ascii=False, default=str)}")
+        encoders = get_available_encoders(ffmpeg_info["path"], hw_info)
+        print(f"[DEBUG] encoders: {[e['id'] + ('(推荐)' if e.get('recommended') else '') for e in encoders]}")
     else:
         encoders = []
+        hw_info = None
 
     return jsonify({
         "ffmpeg_installed": ffmpeg_info["installed"],
         "ffmpeg_version": ffmpeg_info["version"],
         "ffmpeg_path": ffmpeg_info["path"],
         "encoders": encoders,
+        "hardware": hw_info,
     })
 
 
@@ -119,6 +128,7 @@ def upload_file():
         return jsonify({"error": "未选择文件"}), 400
 
     uploaded = []
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     for f in files:
         if f.filename:
             safe_name = f"{uuid.uuid4().hex}_{f.filename}"
@@ -236,13 +246,52 @@ def list_tasks():
     return jsonify({"tasks": [t.to_dict() for t in engine.tasks.values()]})
 
 
+@app.route("/api/hardware_info")
+def hardware_info():
+    """获取硬件信息（GPU、CPU）"""
+    try:
+        hw = detect_hardware()
+        return jsonify(hw)
+    except Exception as e:
+        return jsonify({"error": str(e), "gpus": [], "cpu": {"model": "Unknown"}, "recommended_encoder": None})
+
+
 @app.route("/api/cancel/<task_id>", methods=["POST"])
 def cancel_task(task_id):
     """取消任务"""
     if not engine:
-        return jsonify({"error": "引擎未初始化"}), 400
+        return jsonify({"success": True})
     engine.cancel_task(task_id)
     return jsonify({"success": True})
+
+
+@app.route("/api/cancel_all", methods=["POST"])
+def cancel_all_tasks():
+    """取消所有运行中的任务"""
+    if not engine:
+        return jsonify({"success": True, "cancelled": []})
+    cancelled = []
+    for tid, task in list(engine.tasks.items()):
+        if task.status == "running" or task.status == "pending":
+            engine.cancel_task(tid)
+            cancelled.append(tid)
+    return jsonify({"success": True, "cancelled": cancelled})
+
+
+@app.route("/api/config", methods=["POST"])
+def update_config():
+    """更新配置（并行任务数等）"""
+    global max_concurrent_tasks
+    data = request.get_json()
+    if "max_concurrent" in data:
+        max_concurrent_tasks = max(1, min(int(data["max_concurrent"]), 8))
+    return jsonify({"max_concurrent": max_concurrent_tasks})
+
+
+@app.route("/api/config", methods=["GET"])
+def get_config():
+    """获取当前配置"""
+    return jsonify({"max_concurrent": max_concurrent_tasks})
 
 
 @app.route("/api/download/<filename>")
@@ -254,13 +303,88 @@ def download_file(filename):
     return send_file(str(file_path), as_attachment=True, download_name=filename)
 
 
+@app.route("/api/preview/<filename>")
+def preview_file(filename):
+    """预览压缩后的文件（内嵌播放）"""
+    file_path = OUTPUT_DIR / filename
+    if not file_path.exists():
+        return jsonify({"error": "文件不存在"}), 404
+    ext = Path(filename).suffix.lower()
+    mime_map = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+                ".mkv": "video/x-matroska", ".mp3": "audio/mpeg", ".aac": "audio/aac",
+                ".wav": "audio/wav", ".flac": "audio/flac"}
+    mt = mime_map.get(ext, "application/octet-stream")
+    return send_file(str(file_path), mimetype=mt)
+
+
+@app.route("/api/report")
+def generate_report():
+    """生成所有已完成任务的 HTML 压缩报告"""
+    if not engine:
+        return jsonify({"error": "引擎未初始化"}), 400
+    done_tasks = [t.to_dict() for t in engine.tasks.values() if t.status == "completed"]
+    if not done_tasks:
+        return jsonify({"error": "没有已完成的任务"}), 404
+
+    def _format_size(bytes_val):
+        if not bytes_val:
+            return "0 B"
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if bytes_val < 1024:
+                return f"{bytes_val:.1f} {unit}"
+            bytes_val /= 1024
+        return f"{bytes_val:.1f} TB"
+
+    rows = ""
+    for t in done_tasks:
+        orig = t.get("original_size", 0)
+        comp = t.get("output_size", 0)
+        savings = f"{(1 - comp/orig)*100:.1f}%" if orig and comp else "--"
+        rows += f"""<tr>
+            <td>{t['input_file']}</td>
+            <td>{_format_size(orig)}</td>
+            <td>{_format_size(comp)}</td>
+            <td>{savings}</td>
+            <td>CRF {t.get('progress', '--')}</td>
+            <td>{t.get('elapsed', 0)}秒</td>
+            <td><a href="/api/download/{t['output_file']}">下载</a></td>
+        </tr>\n"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>压缩报告</title>
+<style>
+body {{ font-family: -apple-system, sans-serif; max-width: 960px; margin: 0 auto; padding: 20px; }}
+h1 {{ color: #1e293b; }}
+table {{ width: 100%; border-collapse: collapse; margin-top: 16px; }}
+th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }}
+th {{ background: #f8fafc; font-weight: 600; }}
+tr:hover {{ background: #f1f5f9; }}
+.status-ok {{ color: #16a34a; }}
+</style></head>
+<body>
+<h1>FFmpeg 压缩报告</h1>
+<p>生成时间: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+<p>共 {len(done_tasks)} 个文件</p>
+<table>
+<thead><tr>
+<th>文件名</th><th>原始大小</th><th>压缩后</th><th>节省</th><th>参数</th><th>耗时</th><th>操作</th>
+</tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</body></html>"""
+    return Response(html, mimetype="text/html")
+
+
 @app.route("/api/clear_temp", methods=["POST"])
 def clear_temp():
     """清理临时文件"""
     for d in [UPLOAD_DIR, OUTPUT_DIR]:
-        for f in d.iterdir():
-            if f.is_file():
-                f.unlink()
+        if d.exists():
+            for f in d.iterdir():
+                if f.is_file():
+                    f.unlink()
+        d.mkdir(parents=True, exist_ok=True)
     return jsonify({"success": True})
 
 
@@ -271,7 +395,18 @@ def create_app():
     return app
 
 
+# 模块加载时确保目录存在
+for d in [UPLOAD_DIR, OUTPUT_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
+
+
 if __name__ == "__main__":
+    # Fix Windows GBK encoding issue for emoji output
+    if sys.stdout.encoding != 'utf-8':
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+        except Exception:
+            pass
     create_app()
     port = int(os.environ.get("PORT", 8080))
     print(f"\n  🎬 FFmpeg 媒体压缩工具 v1.0")
